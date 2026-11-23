@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+
+# never publish: per-transaction txid/wallet -> source IP (the deanonymization join itself)
+data/observer_out.json
+data/obs_wallet_out.json
+data/signet_observer.json
+
+# lab runtime artifacts (downloaded binaries / synced chains)
+lab/core/
+lab/signet-data/
