@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exploiting Wallet Rebroadcast to Link Addresses to Node IPs</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --faint:#222a35; --text:#c9d4e0; --dim:#8b97a7;
+    --blue:#58c4dd; --orange:#f0ac5f; --green:#83c167; --red:#fc6255; --purple:#a67fd6; --yellow:#f5d547;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;overflow:hidden}
+  code,.mono{font-family:"DejaVu Sans Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .deck{position:fixed;inset:0}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:4vh 7vw;animation:fade .25s ease}
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  h1{font-size:3.1rem;line-height:1.12;margin:0 0 1rem;color:#fff;font-weight:700}
+  h2{font-size:2.1rem;margin:0 0 1.6rem;color:var(--blue);font-weight:650;letter-spacing:.2px}
+  h2 .n{color:var(--dim);font-size:1.1rem;font-weight:400;margin-left:.6rem}
+  ul{font-size:1.5rem;line-height:1.6;margin:.2rem 0;padding-left:1.3em;max-width:60ch}
+  li{margin:.5rem 0}
+  li::marker{color:var(--orange)}
+  .sub{color:var(--dim);font-size:1.25rem}
+  .kv{color:var(--green)} .hot{color:var(--orange)} .bad{color:var(--red)} .acc{color:var(--blue)}
+  code{background:var(--faint);padding:.08em .4em;border-radius:5px;font-size:.9em;color:var(--yellow)}
+  .center{align-items:center;text-align:center}
+  .center ul{text-align:left}
+  figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:.8rem}
+  figure img{max-height:62vh;max-width:84vw;border-radius:10px;border:1px solid var(--faint);
+    box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  figcaption{color:var(--dim);font-size:1.15rem;max-width:70ch;text-align:center}
+  .row{display:flex;gap:4vw;align-items:center}
+  .row .txt{flex:1} .row figure img{max-height:58vh}
+  table{border-collapse:collapse;font-size:1.25rem;margin-top:.4rem}
+  td,th{border:1px solid var(--faint);padding:.4rem .9rem;text-align:left}
+  th{color:var(--blue)}
+  .pill{display:inline-block;background:var(--panel);border:1px solid var(--faint);border-radius:999px;
+    padding:.25em .9em;margin:.25em .3em 0 0;font-size:1.05rem}
+  .big{font-size:4.2rem;color:var(--green);font-weight:700}
+  .hud{position:fixed;bottom:2.2vh;right:3vw;color:var(--dim);font-size:1rem;z-index:5}
+  .hud .mono{color:var(--text)}
+  .bar{position:fixed;top:0;left:0;height:4px;background:var(--blue);transition:width .25s;z-index:5}
+  .foot{position:fixed;bottom:2.2vh;left:3vw;color:var(--dim);font-size:1rem;z-index:5}
+  a{color:var(--blue)}
+  .two-col{columns:2;column-gap:3vw}
+  .two-col ul{font-size:1.25rem}
+</style>
+</head>
+<body>
+<div class="bar" id="bar"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 title -->
+  <section class="slide center">
+    <h1>Exploiting Wallet Rebroadcast<br>to Link Addresses to Node IPs<br><span style="color:var(--dim);font-size:.5em">(and more)</span></h1>
+    <p class="sub">An active, deterministic deanonymization of Bitcoin Core nodes</p>
+    <p class="sub mono" style="margin-top:2rem">ismaelsadeeq · delvingbitcoin.org/t/...3123</p>
+  </section>
+
+  <!-- 2 the problem -->
+  <section class="slide">
+    <h2>Deanonymizing a tx source is hard<span class="n">passively</span></h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>First-spy / LinkingLion: watch who announces a tx first</li>
+          <li>Core announces on <span class="acc">different clocks</span>: ~2s per outbound peer, a shared ~5s inbound timer</li>
+          <li>Poisson timers blur it — the source is only <em>probably</em> first</li>
+          <li>Result: a biased, noisy guess. Never certain.</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/diffusion.gif" alt="diffusion"></figure>
+    </div>
+  </section>
+
+  <!-- 3 the insight -->
+  <section class="slide center">
+    <h2>The active version is deterministic</h2>
+    <ul style="font-size:1.7rem">
+      <li>Core's wallet <span class="hot">re-announces</span> an unconfirmed tx it holds — sent <em>or received</em> — after 12–36h</li>
+      <li>So <span class="green">make the victim's wallet announce</span>, instead of waiting to overhear it</li>
+      <li>In our tests: <span class="kv">address → node 100% of the time</span></li>
+    </ul>
+  </section>
+
+  <!-- 4 threat model -->
+  <section class="slide">
+    <h2>What the attacker needs</h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Knows a candidate on-chain address</li>
+          <li>Can broadcast a tx paying it</li>
+          <li>Runs one or more listening nodes</li>
+          <li>Can observe P2P tx announcements</li>
+          <li>Willing to wait out the 12–36h timer</li>
+        </ul>
+      </div>
+      <div class="txt">
+        <p class="sub">It does <span class="bad">not</span> need:</p>
+        <ul>
+          <li>the victim's machine or wallet</li>
+          <li>private keys</li>
+          <li>cooperation from the victim</li>
+          <li>a high-fee transaction</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 mechanism -->
+  <section class="slide">
+    <h2>Plant · wait · rebroadcast</h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Pay a <span class="hot">dust-sized output</span> to an already-used address</li>
+          <li>Low fee → it won't confirm → sits in the wallet unconfirmed</li>
+          <li>Wallet resends it on its own 12–36h timer</li>
+          <li>Connect a <span class="acc">fresh peer</span> to each candidate</li>
+          <li>The node that re-announces the planted txid is the one tracking that address</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/rebroadcast_attack.gif" alt="rebroadcast attack"></figure>
+    </div>
+  </section>
+
+  <!-- 6 recognition not control -->
+  <section class="slide">
+    <h2>Recognition, not key control</h2>
+    <ul>
+      <li><code>IsMine</code> checks only that the output script is in the wallet — <span class="bad">no key check</span></li>
+      <li>So <span class="hot">watch-only wallets leak too</span>; the resend path has no spendable-keys gate</li>
+      <li>We identify the node whose wallet <em>recognizes</em> the address</li>
+      <li class="sub">That may be a watch-only server / exchange / shared service — not necessarily who controls the funds</li>
+    </ul>
+  </section>
+
+  <!-- 7 why fresh peer works -->
+  <section class="slide">
+    <h2>Why it's 100%, and why a <em>fresh</em> peer<span class="n">the mechanics</span></h2>
+    <ul>
+      <li>Resend takes the broadcast-to-all path <code>InitiateTxBroadcastToAll</code> — no network filter, fires even while the tx is in the mempool</li>
+      <li>Per-peer suppression still applies, so an already-told peer isn't told again…</li>
+      <li>…but a <span class="acc">freshly connected spy</span> hasn't been told → it receives it</li>
+      <li>Ordinary relays never dump old mempool txs to a new peer → <span class="green">no false positives</span></li>
+      <li class="sub mono">eligible when nTimeReceived ≤ m_best_block_time − 5min</li>
+    </ul>
+  </section>
+
+  <!-- 8 regtest result -->
+  <section class="slide center">
+    <h2>Regtest result</h2>
+    <p class="big">100% &nbsp;<span style="font-size:.5em;color:var(--dim)">(30/30)</span></p>
+    <ul style="font-size:1.5rem">
+      <li><span class="green">100%</span> active rebroadcast attribution (K=5 targets × 6 trials)</li>
+      <li><span class="bad">0%</span> for a passive observer on the sender</li>
+      <li><span class="sub">20% random baseline</span></li>
+    </ul>
+    <p class="sub">Stock Dockerized Core nodes · mock-time stepped past the resend window</p>
+  </section>
+
+  <!-- 9 cost -->
+  <section class="slide">
+    <h2>Cost: about a dollar a round</h2>
+    <div class="row">
+      <div class="txt">
+        <table>
+          <tr><th>output</th><th>per-tx</th><th>round ×5</th><th>~USD</th></tr>
+          <tr><td>P2WPKH</td><td>305 sat</td><td>1,525</td><td>$0.90</td></tr>
+          <tr><td>P2TR</td><td>342 sat</td><td>1,710</td><td>$1.01</td></tr>
+          <tr><td>P2PKH</td><td>566 sat</td><td>2,830</td><td>$1.67</td></tr>
+        </table>
+        <p class="sub" style="margin-top:1rem">min relay 0.1 sat/vB · dust 294/330/546 sat</p>
+      </div>
+      <div class="txt">
+        <ul>
+          <li>Dust is ~95% of the cost</li>
+          <li>Priced to stay unconfirmed → can <span class="green">RBF-cancel it back</span> after attribution</li>
+          <li>Net cost drops to ~two relay fees per target — a few tens of sats</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 fingerprinting -->
+  <section class="slide">
+    <h2>Pick targets cheaply: fingerprinting</h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Wallet fingerprinting reads the software off a tx's construction</li>
+          <li>Input ordering, change position, nVersion, anti-fee-sniping locktime…</li>
+          <li>Filter on-chain spends to the <span class="acc">likely-Core</span> set</li>
+          <li>Probe that set, not the whole chain</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/utxo_deanon.gif" alt="fingerprint and filter"></figure>
+    </div>
+  </section>
+
+  <!-- 11 clustering -->
+  <section class="slide">
+    <h2>What you build: an address → node map</h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Each hit ties an address to a node IP</li>
+          <li>Repeat → a map of which addresses sit at which nodes</li>
+          <li>Enables clustering <span class="bad">even without address reuse</span></li>
+          <li class="sub">Caveat: same-node is an association, not proof of ownership (one entity, many nodes; a wallet can track addresses it doesn't own)</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/clustering.gif" alt="clustering"></figure>
+    </div>
+  </section>
+
+  <!-- 12 non-listening -->
+  <section class="slide">
+    <h2>Reaching non-listening nodes &amp; the multi-network leak</h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Most nodes are behind NAT — you can't dial them</li>
+          <li>Instead: <span class="acc">advertise &amp; listen</span>, they dial out to you → same attribution</li>
+          <li><code>InitiateTxBroadcastToAll</code> has <span class="bad">no network filter</span></li>
+          <li>A Tor/I2P node that also keeps clearnet peers leaks its clearnet IP</li>
+          <li>Only <code>-onlynet=onion</code> avoids it; dual-stack does not</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/nat_capture.gif" alt="NAT capture"></figure>
+    </div>
+  </section>
+
+  <!-- 13 private broadcast -->
+  <section class="slide">
+    <h2>Private broadcast doesn't save you</h2>
+    <ul>
+      <li><span class="hot">Passive:</span> a low-fee <code>-privatebroadcast</code> tx that sits 12–36h → the resend falls back to <code>InitiateTxBroadcastToAll</code> and leaks to all peers</li>
+      <li><span class="hot">Active:</span> even if it confirms (or was pushed via a third-party/Tor pusher while watched in Core) → just plant a new payment and wait for the rebroadcast</li>
+      <li class="sub">The private path only covers the <em>first</em> announcement; the rebroadcast ignores it</li>
+    </ul>
+  </section>
+
+  <!-- 14 affected -->
+  <section class="slide">
+    <h2>Affected software</h2>
+    <div class="row">
+      <div class="txt">
+        <p class="acc">Affected — anything loading addresses into a Core wallet:</p>
+        <div><span class="pill">Core / Knots</span><span class="pill">Sparrow (Core mode)</span><span class="pill">Specter</span><span class="pill">Liana</span><span class="pill">Fully Noded</span><span class="pill">Gordian</span><span class="pill">JoinMarket / Jam</span><span class="pill">Electrum Personal Server</span><span class="pill">Caravan</span><span class="pill">bwt</span><span class="pill">Eclair (hot wallet)</span></div>
+      </div>
+      <div class="txt">
+        <p class="green">Not affected — own scanning / Electrum / CBF backends:</p>
+        <div><span class="pill">LND</span><span class="pill">Core Lightning</span><span class="pill">BDK / Bitcoin Safe</span><span class="pill">Wasabi (neutrino)</span><span class="pill">anything on Fulcrum/electrs/Esplora</span></div>
+        <p class="sub" style="margin-top:1rem">Mechanism verified in Core's code; the app list is from each project's documented integration — confirm per version.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 topology -->
+  <section class="slide">
+    <h2>Bonus: topology from timing<span class="n">an honest, partial result</span></h2>
+    <div class="row">
+      <div class="txt">
+        <ul>
+          <li>Simulate a fresh broadcast from the known source (Hyperion, observer inbound to every node)</li>
+          <li>The <span class="green">2nd announcer is a 1-hop neighbour ~90%</span> of the time (2k &amp; 10k nodes)</li>
+          <li>But you <span class="bad">can't rank the neighbourhood</span>: a ≥3-hop node beats a 1-hop node in <em>every</em> sim</li>
+          <li class="sub">Shared 5s inbound timer flattens the order. Synthetic 8-out graph, not mainnet.</li>
+        </ul>
+      </div>
+      <figure><img src="../results/figures/topology_step1.gif" alt="topology"></figure>
+    </div>
+  </section>
+
+  <!-- 16 mitigations -->
+  <section class="slide">
+    <h2>Mitigations</h2>
+    <ul>
+      <li><code>-walletbroadcast=0</code> kills the signal — but it disables <span class="bad">all</span> wallet broadcasting (even your own sends); relay them yourself via <code>sendrawtransaction</code></li>
+      <li>One flag gates two behaviours: initial broadcast <em>and</em> periodic (re)broadcast</li>
+      <li class="sub">Splitting is tricky: the periodic path also fires on <em>received</em> txs the wallet never broadcast — that's the leak itself</li>
+      <li><a href="#">bitcoin/bitcoin#36482</a>: only rebroadcast a <em>newly-added</em> tx → removes the planted-tx signal (eviction path remains)</li>
+    </ul>
+  </section>
+
+  <!-- 17 takeaways -->
+  <section class="slide center">
+    <h2>Takeaways</h2>
+    <ul style="font-size:1.6rem">
+      <li>Wallet rebroadcast turns a noisy passive guess into a <span class="green">deterministic active attack</span></li>
+      <li>Cheap (~$1/round, recoverable), works on <span class="hot">watch-only</span> and across networks</li>
+      <li>Links addresses to <em>nodes</em> — recognition, not proof of ownership</li>
+      <li>Fix needs to decouple rebroadcast from broadcast, or gate it (#36482)</li>
+    </ul>
+    <p class="sub mono" style="margin-top:2rem">delvingbitcoin.org/t/exploiting-wallet-rebroadcast-...3123 · thanks!</p>
+  </section>
+
+</div>
+
+<div class="bar" id="bar"></div>
+<div class="foot">← → / space · <span class="mono">f</span> fullscreen · <span class="mono">o</span> overview</div>
+<div class="hud"><span class="mono" id="cur">1</span> / <span id="tot">17</span></div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  let i=0, overview=false;
+  const bar=document.getElementById('bar'), cur=document.getElementById('cur'), tot=document.getElementById('tot');
+  tot.textContent=slides.length;
+  function show(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    cur.textContent=i+1;
+    bar.style.width=((i+1)/slides.length*100)+'%';
+    location.hash=i+1;
+  }
+  function next(){show(i+1)} function prev(){show(i-1)}
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','ArrowDown',' ','PageDown'].includes(e.key)){e.preventDefault();next()}
+    else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();prev()}
+    else if(e.key==='Home'){show(0)} else if(e.key==='End'){show(slides.length-1)}
+    else if(e.key==='f'){const d=document.documentElement; document.fullscreenElement?document.exitFullscreen():d.requestFullscreen&&d.requestFullscreen()}
+    else if(e.key==='o'){toggleOverview()}
+  });
+  // click right half = next, left half = prev
+  document.getElementById('deck').addEventListener('click',e=>{ if(overview)return; (e.clientX>window.innerWidth/2)?next():prev(); });
+  function toggleOverview(){
+    overview=!overview; const deck=document.getElementById('deck');
+    if(overview){
+      deck.style.cssText='position:fixed;inset:0;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:20px;overflow:auto';
+      slides.forEach((s,k)=>{s.style.cssText='position:relative;inset:auto;display:flex;transform:scale(1);height:22vh;overflow:hidden;border:1px solid var(--faint);border-radius:8px;cursor:pointer;padding:1vh 1vw;font-size:.4rem';
+        s.onclick=()=>{toggleOverview();show(k)};});
+    }else{
+      deck.style.cssText=''; slides.forEach(s=>{s.style.cssText='';s.onclick=null;});
+      document.getElementById('deck').addEventListener('click',e=>{if(overview)return;(e.clientX>window.innerWidth/2)?next():prev();});
+      show(i);
+    }
+  }
+  show((parseInt(location.hash.slice(1))||1)-1);
+</script>
+</body>
+</html>
